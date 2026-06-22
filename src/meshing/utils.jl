@@ -261,19 +261,45 @@ function max_distance(x::AbstractMatrix)
     return min_max_distance(x)[2]
 end
 
-function field_from_points(sector_division::Symbol,xy::AbstractMatrix, num_sectors::Int, depths::AbstractVector)
-
-    num_wells = size(xy, 2)
-    well_coords = Vector{Matrix{Float64}}(undef, num_wells)
-    for i in 1:num_wells
-        x_top, y_top, z_top = xy[1, i], xy[2, i], 0.0 + 1e-3
-        x_bottom, y_bottom, z_bottom = xy[1, i], xy[2, i], depths[end] - 1e-3
-        well_coords[i] = permutedims([x_top y_top z_top; x_bottom y_bottom z_bottom])
+function expand_well_depths(well_depth, sector_indices::AbstractVector{<:AbstractVector{Int}}, num_wells::Int)
+    if well_depth isa Number
+        return fill(Float64(well_depth), num_wells)
+    elseif well_depth isa AbstractVector
+        if length(well_depth) == 1
+            return fill(Float64(well_depth[1]), num_wells)
+        elseif length(well_depth) == length(sector_indices)
+            depths = Vector{Float64}(undef, num_wells)
+            for (sno, idx) in enumerate(sector_indices)
+                depths[idx] .= Float64(well_depth[sno])
+            end
+            return depths
+        elseif length(well_depth) == num_wells
+            return Float64.(well_depth)
+        else
+            error("well_depth must be a scalar, one value per sector, or one value per well")
+        end
+    else
+        error("well_depth must be a Number or an AbstractVector")
     end
+end
+
+function field_from_points(sector_division::Symbol, xy::AbstractMatrix, num_sectors::Int, well_depth)
+
     if sector_division == :angular
         sector_indices = group_into_sectors_angular(xy, num_sectors)
     elseif sector_division == :cartesian
         sector_indices = group_into_sectors_cartesian(xy, num_sectors)
+    else
+        error("Unknown sector_division: $sector_division")
+    end
+
+    num_wells = size(xy, 2)
+    well_depths = expand_well_depths(well_depth, sector_indices, num_wells)
+    well_coords = Vector{Matrix{Float64}}(undef, num_wells)
+    for i in 1:num_wells
+        x_top, y_top, z_top = xy[1, i], xy[2, i], 0.0 + 1e-3
+        x_bottom, y_bottom, z_bottom = xy[1, i], xy[2, i], well_depths[i] - 1e-3
+        well_coords[i] = permutedims([x_top y_top z_top; x_bottom y_bottom z_bottom])
     end
 
     return [well_coords[idx] for idx in sector_indices]
