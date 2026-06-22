@@ -22,10 +22,12 @@ Setup function for borehole thermal energy storage (BTES) system.
 - `num_sides = 6`: Number of sides of the polygon when `pattern = :polygonal`.
 - `num_wells = 48`: Number of wells in the BTES system.
 - `num_sections = 6`: Number of sections in the BTES system. The system is
+- `num_sectors = 6`: Number of sections in the BTES system. The system is
   divided into equal circle sectors, and all wells in each sector are coupled in series.
 - `well_spacing = 5.0`: Horizontal spacing between wells [m].
-- `depths = [0.0, 0.5, 50, 65]`: Depths delineating geological layers [m].
-- `well_layers = [1, 2]`: Layers in which the wells are placed
+- `well_depth = 50.0`: Well depth [m]. Can be either a scalar (all wells), one
+    value per sector, or one value per well.
+- `layer_depths = [0.0, 0.5, 50, 65]`: Depths delineating geological layers [m].
 - `density = [30, 2580, 2580]: Rock density in the layers [kg/m³].
 - `thermal_conductivity = [0.034, 3.7, 3.7]: Thermal conductivity in the layers [W/(m⋅K)].
 - `heat_capacity = [1500, 900, 900]`: Heat capacity in the layers [J/(kg⋅K)].
@@ -55,67 +57,43 @@ function btes(
     num_wells = 48,
     num_sectors = 6,
     well_spacing = 5.0,
-    depths = [0.0, 0.5, 50, 65],
-    well_layers = [1, 2],
-    density = [30, 2580, 2580]*kilogram/meter^3,
-    thermal_conductivity = [0.034, 3.7, 3.7]*watt/meter/Kelvin,
-    heat_capacity = [1500, 900, 900]*joule/kilogram/Kelvin,
-    geothermal_gradient = 0.03Kelvin/meter,
-    temperature_charge = convert_to_si(90.0, :Celsius),
-    temperature_discharge = convert_to_si(10.0, :Celsius),
-    rate_charge = 0.5litre/second,
-    rate_discharge = rate_charge,
-    reversed_discharge = false,
-    temperature_surface = convert_to_si(10.0, :Celsius),
-    num_years = 4,
-    charge_period = ["June", "September"],
-    discharge_period = ["December", "March"],
-    report_interval = 14day,
-    utes_schedule_args = NamedTuple(),
-    n_z = [3, 8, 3],
-    n_xy = 3,
-    mesh_args = NamedTuple(),
+    well_depth = 50.0,
+    kwargs...
     )
 
     if pattern == :sunflower
-        field = sunflower_pattern(num_wells, well_spacing; num_sectors = num_sectors, depths = depths)
+        field = sunflower_pattern(num_wells, well_spacing; num_sectors = num_sectors, well_depth = well_depth)
     elseif pattern == :rectangular
-        field = rectangular_pattern(num_wells, well_spacing; num_sectors = num_sectors, depths = depths)
+        field = rectangular_pattern(num_wells, well_spacing; num_sectors = num_sectors, well_depth = well_depth)
     elseif pattern == :circular
-        field = circular_pattern(num_wells, well_spacing; num_sectors = num_sectors, depths = depths)
+        field = circular_pattern(num_wells, well_spacing; num_sectors = num_sectors, well_depth = well_depth)
     elseif pattern == :polygonal
-        field = polygonal_pattern(num_wells, well_spacing, num_sides; num_sectors = num_sectors, depths = depths)
+        field = polygonal_pattern(num_wells, well_spacing, num_sides; num_sectors = num_sectors, well_depth = well_depth)
     else
         error("Unknown pattern: $pattern. Supported patterns are :sunflower, :rectangular, :circular and :polygonal.")
     end
 
-    return btes(field; well_spacing = well_spacing,depths = depths,well_layers = well_layers,
-    density = density, thermal_conductivity = thermal_conductivity,heat_capacity = heat_capacity,
-    geothermal_gradient = geothermal_gradient,temperature_charge = temperature_charge,temperature_discharge = temperature_discharge,
-    rate_charge = rate_charge,rate_discharge = rate_discharge,reversed_discharge = reversed_discharge,temperature_surface = temperature_surface,num_years = num_years,charge_period = charge_period,
-    discharge_period = discharge_period,report_interval = report_interval,utes_schedule_args = utes_schedule_args,n_z = n_z,n_xy = n_xy,mesh_args = mesh_args)
+    return btes(field; kwargs...)
 
 end
 
 function btes(
     field::Vector{Vector{Matrix{Float64}}};
-    well_spacing = 5.0,
     depths = [0.0, 0.5, 50, 65],
-    well_layers = [1, 2],
-    density = [30, 2580, 2580]*kilogram/meter^3,
-    thermal_conductivity = [0.034, 3.7, 3.7]*watt/meter/Kelvin,
-    heat_capacity = [1500, 900, 900]*joule/kilogram/Kelvin,
-    geothermal_gradient = 0.03Kelvin/meter,
+    density = [30, 2580, 2580]*si_unit(:kilogram)/si_unit(:meter)^3,
+    thermal_conductivity = [0.034, 3.7, 3.7]*si_unit(:watt)/si_unit(:meter)/si_unit(:Kelvin),
+    heat_capacity = [1500, 900, 900]*si_unit(:joule)/si_unit(:kilogram)/si_unit(:Kelvin),
+    geothermal_gradient = 0.03*si_unit(:Kelvin)/si_unit(:meter),
     temperature_charge = convert_to_si(90.0, :Celsius),
     temperature_discharge = convert_to_si(10.0, :Celsius),
-    rate_charge = 0.5litre/second,
+    rate_charge = 0.5*si_unit(:litre)/si_unit(:second),
     rate_discharge = rate_charge,
     reversed_discharge = false,
     temperature_surface = convert_to_si(10.0, :Celsius),
     num_years = 4,
     charge_period = ["June", "September"],
     discharge_period = ["December", "March"],
-    report_interval = 14day,
+    report_interval = 14*si_unit(:day),
     utes_schedule_args = NamedTuple(),
     n_z = [3, 8, 3],
     n_xy = 3,
@@ -129,26 +107,43 @@ function btes(
 
     well_coords_3d = vcat(field...)
     num_wells = length(well_coords_3d)
+    well_depths = [maximum(wc[3, :]) for wc in well_coords_3d]
+
+    depths, updated_layer_data = insert_well_depths_in_layers(
+        depths,
+        well_depths,
+        (
+            density = density,
+            thermal_conductivity = thermal_conductivity,
+            heat_capacity = heat_capacity,
+            n_z = n_z,
+        ),
+    )
+    density = updated_layer_data.density
+    thermal_conductivity = updated_layer_data.thermal_conductivity
+    heat_capacity = updated_layer_data.heat_capacity
+    n_z = Int.(updated_layer_data.n_z)
 
     # ## Create mesh
     # Use the (x,y) projection of each well trajectory as a mesh constraint
-    well_coordinates = [wc[1:2, :] for wc in well_coords_3d]
+    cell_constraints = [unique(wc[1:2, :], dims=2) for wc in well_coords_3d]
+    well_spacing = min_distance(hcat(cell_constraints...))
     hz = diff(depths)./n_z
     hxy = well_spacing/n_xy
 
     # ## Set up model
     # Set up reservoir domain with rock properties similar to that of granite,
     # with a styrofoam layer on top                
-    domain, layers, metrics = layered_reservoir_domain(well_coordinates, depths,
+    domain, layers, metrics = layered_reservoir_domain(cell_constraints, depths,
         (
             rock_density = density,
             rock_thermal_conductivity = thermal_conductivity,
             rock_heat_capacity = heat_capacity
         );
         mesh_args = (; hxy_min = hxy, hz = hz, mesh_args...),
-        permeability = 1e-6darcy,
+        permeability = 1e-6*si_unit(:darcy),
         porosity = 0.01,
-        component_heat_capacity = 4.278e3joule/kilogram/Kelvin,
+        component_heat_capacity = 4.278e3*si_unit(:joule)/si_unit(:kilogram)/si_unit(:Kelvin),
     )
     mesh = physical_representation(domain)
     # Set up BTES wells
@@ -162,7 +157,6 @@ function btes(
         name = Symbol("B$wno")
         println("Adding well $name ($wno/$num_wells)")
         cells = Jutul.find_enclosing_cells(mesh, permutedims(wc), n = 100)
-        filter!(c -> layers[c] ∈ well_layers, cells)
         w_sup, w_ret = setup_btes_well(domain, cells, name=name, closed_loop_type=:u1)
         push!(well_models, w_sup, w_ret)
         push!(well_names, name)
@@ -234,17 +228,71 @@ function btes(
 
 end
 
+function btes(field::AbstractMatrix; kwargs...)
+    return btes([[Matrix{Float64}(field)]]; kwargs...)
+end
+
+function expand_layer_values(value, num_layers::Int, name::Symbol)
+    if value isa Number
+        return fill(value, num_layers)
+    elseif value isa AbstractVector
+        if length(value) == 1
+            return fill(value[1], num_layers)
+        elseif length(value) == num_layers
+            return collect(value)
+        else
+            error("Length of $name ($(length(value))) does not match number of layers ($num_layers)")
+        end
+    else
+        error("$name must be a scalar or an AbstractVector")
+    end
+end
+
+function insert_well_depths_in_layers(layer_depths, well_depths, layer_data::NamedTuple; tol = 1e-6)
+    layer_depths = sort(collect(layer_depths))
+    @assert length(layer_depths) >= 2 "layer_depths must contain at least two depth values"
+
+    num_layers = length(layer_depths) - 1
+    values = Dict{Symbol, Any}()
+    for (name, value) in pairs(layer_data)
+        values[name] = expand_layer_values(value, num_layers, name)
+    end
+
+    too_deep = sort(unique([d for d in well_depths if d > layer_depths[end] + tol]))
+    if !isempty(too_deep)
+        @warn "One or more wells are deeper than the deepest layer depth ($(layer_depths[end]) m)." max_well_depth = maximum(too_deep)
+    end
+
+    insertion_depths = sort(unique([d for d in well_depths if d > layer_depths[1] + tol && d < layer_depths[end] - tol]))
+    for d in insertion_depths
+        if any(isapprox.(layer_depths, d; atol = tol))
+            continue
+        end
+        upper_idx = findfirst(z -> z > d, layer_depths)
+        isnothing(upper_idx) && continue
+
+        layer_idx = upper_idx - 1
+        insert!(layer_depths, upper_idx, d)
+        for name in keys(layer_data)
+            insert!(values[name], layer_idx, values[name][layer_idx])
+        end
+    end
+
+    expanded_values = (; (name => values[name] for name in keys(layer_data))...)
+    return layer_depths, expanded_values
+end
+
 # ## Patterns
 #
 # Each pattern function takes the number of wells and the approximate
 # spacing between neighboring wells, and returns a full field
 
-function sunflower_pattern(num_wells, spacing; num_sectors = 6, depths = [0.0, 0.5, 50, 65])
+function sunflower_pattern(num_wells, spacing; num_sectors, well_depth = 50.0)
     xy = fibonacci_pattern_2d(num_wells; spacing = spacing)
-    return field_from_points(:angular,xy, num_sectors, depths)
+    return field_from_points(:angular,xy, num_sectors, well_depth)
 end
 
-function rectangular_pattern(num_wells, spacing; num_sectors = 6, depths = [0.0, 0.5, 50, 65])
+function rectangular_pattern(num_wells, spacing; num_sectors, well_depth = 50.0)
     nx = max(1, round(Int, sqrt(num_wells)))
     ny = ceil(Int, num_wells/nx)
     xs = ((0:nx-1) .- (nx-1)/2).*spacing
@@ -256,10 +304,10 @@ function rectangular_pattern(num_wells, spacing; num_sectors = 6, depths = [0.0,
         xy[:, k] = [x, y]
     end
     xy = xy[:, 1:num_wells]
-    return field_from_points(:cartesian,xy, num_sectors, depths)
+    return field_from_points(:cartesian, xy, num_sectors, well_depth)
 end
 
-function circular_pattern(num_wells, spacing; num_sectors = 6, depths = [0.0, 0.5, 50, 65])
+function circular_pattern(num_wells, spacing; num_sectors, well_depth = 50.0)
     points = Vector{Vector{Float64}}()
     push!(points, [0.0, 0.0])
     ring = 1
@@ -273,10 +321,10 @@ function circular_pattern(num_wells, spacing; num_sectors = 6, depths = [0.0, 0.
         ring += 1
     end
     xy = hcat(points...)
-    return field_from_points(:angular,xy, num_sectors, depths)
+    return field_from_points(:angular, xy, num_sectors, well_depth)
 end
 
-function polygonal_pattern(num_wells, spacing, num_sides; num_sectors = 6, depths = [0.0, 0.5, 50, 65])
+function polygonal_pattern(num_wells, spacing, num_sides; num_sectors, well_depth = 50.0)
     # Regular polygon with an area roughly matching num_wells points at the
     # given spacing
     R = sqrt(2*num_wells*spacing^2/(num_sides*sin(2π/num_sides)))
@@ -301,7 +349,7 @@ function polygonal_pattern(num_wells, spacing, num_sides; num_sectors = 6, depth
     order = sortperm(r)[1:min(num_wells, size(xy, 2))]
     xy = xy[:, order]
 
-    return field_from_points(:angular,xy, num_sectors, depths)
+    return field_from_points(:angular,xy, num_sectors, well_depth)
 end
 
 function setup_controls(model, wells_per_sector::AbstractVector{<:AbstractVector{Symbol}},
